@@ -79,16 +79,22 @@ body {
 
 @keyframes skeleton-loading {
   0% {
-    background-color: hsl(200, 20%, 80%);
+    background-position: 100% 50%;
   }
   100% {
-    background-color: hsl(200, 20%, 95%);
+    background-position: 0 50%;
   }
 }
 
 .skeleton {
-  opacity: 0.7;
-  animation: skeleton-loading 1s linear infinite alternate;
+  background: linear-gradient(
+    90deg,
+    rgba(0, 0, 0, 0.06) 25%,
+    rgba(0, 0, 0, 0.15) 37%,
+    rgba(0, 0, 0, 0.06) 63%
+  );
+  background-size: 400% 100%;
+  animation: skeleton-loading 1.4s ease infinite;
 }
 
 .skeleton.rounded-full {
