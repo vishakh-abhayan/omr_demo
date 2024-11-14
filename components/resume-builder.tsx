@@ -1,21 +1,13 @@
 "use client";
 import React, { useState, useRef, useEffect } from "react";
-import {
-  Mail,
-  Phone,
-  MapPin,
-  Globe,
-  Briefcase,
-  GraduationCap,
-  Award,
-  Send,
-} from "lucide-react";
+import { Briefcase, GraduationCap, Award, Send } from "lucide-react";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 
+// Types and Interfaces
 interface Message {
   sender: "bot" | "user";
   content: string;
@@ -50,24 +42,59 @@ interface ResumeData {
   certifications: string[];
 }
 
-type ResumeDataPath =
-  | "personalInfo.name"
-  | "personalInfo.email"
-  | "personalInfo.phone"
-  | "personalInfo.title"
-  | "summary"
-  | "experience"
-  | "education"
-  | "skills"
-  | "certifications";
+const RESUME_PATHS = [
+  "personalInfo.name",
+  "personalInfo.email",
+  "personalInfo.phone",
+  "personalInfo.title",
+  "summary",
+  "experience",
+  "education",
+  "skills",
+  "certifications",
+] as const;
 
-function getNestedValue(obj: ResumeData, path: ResumeDataPath): any {
+type ResumeDataPath = (typeof RESUME_PATHS)[number];
+
+// WebSocket message types
+interface WebSocketMessage {
+  type: "question" | "update" | "complete" | "error";
+  data: WebSocketMessageData;
+}
+
+type WebSocketMessageData =
+  | QuestionMessage
+  | UpdateMessage
+  | CompleteMessage
+  | ErrorMessage;
+
+interface QuestionMessage {
+  question: string;
+  field?: ResumeDataPath;
+}
+
+interface UpdateMessage {
+  field: ResumeDataPath;
+  value: unknown;
+}
+
+interface CompleteMessage {
+  message: string;
+  finalResume: ResumeData;
+}
+
+interface ErrorMessage {
+  message: string;
+}
+
+// Helper functions
+function getNestedValue(obj: ResumeData, path: ResumeDataPath): unknown {
   const parts = path.split(".");
-  let result: any = obj;
+  let result: unknown = obj;
 
   for (const part of parts) {
-    if (result && typeof result === "object" && part in result) {
-      result = result[part];
+    if (result && typeof result === "object" && part in (result as object)) {
+      result = (result as Record<string, unknown>)[part];
     } else {
       return undefined;
     }
@@ -79,16 +106,16 @@ function getNestedValue(obj: ResumeData, path: ResumeDataPath): any {
 function setNestedValue(
   obj: ResumeData,
   path: ResumeDataPath,
-  value: any
+  value: unknown
 ): ResumeData {
   const newObj = { ...obj };
   const parts = path.split(".");
-  let current: any = newObj;
+  let current: Record<string, unknown> = newObj;
 
   for (let i = 0; i < parts.length - 1; i++) {
     const part = parts[i];
-    current[part] = { ...current[part] };
-    current = current[part];
+    current[part] = { ...(current[part] as object) };
+    current = current[part] as Record<string, unknown>;
   }
 
   const lastPart = parts[parts.length - 1];
@@ -96,23 +123,41 @@ function setNestedValue(
   return newObj;
 }
 
+// Skeleton components
+const SkeletonExperience: React.FC = () => (
+  <div className="mb-6">
+    <div className="flex items-center mb-2">
+      <Briefcase className="w-5 h-5 mr-2 text-gray-400" />
+      <div className="skeleton w-48 h-6"></div>
+    </div>
+    <div className="skeleton w-32 h-4 mb-2"></div>
+    <div className="space-y-2">
+      <div className="skeleton w-full h-4"></div>
+      <div className="skeleton w-full h-4"></div>
+      <div className="skeleton w-3/4 h-4"></div>
+    </div>
+  </div>
+);
+
+const SkeletonEducation: React.FC = () => (
+  <div className="mb-6">
+    <div className="flex items-center mb-2">
+      <GraduationCap className="w-5 h-5 mr-2 text-gray-400" />
+      <div className="skeleton w-40 h-6"></div>
+    </div>
+    <div className="skeleton w-32 h-4"></div>
+  </div>
+);
+
+// Main component
 export function ResumeBuilder() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [inputMessage, setInputMessage] = useState("");
   const [ws, setWs] = useState<WebSocket | null>(null);
   const scrollAreaRef = useRef<HTMLDivElement>(null);
   const [isInitialLoading, setIsInitialLoading] = useState(true);
-  const initialLoadingFields: Set<ResumeDataPath> = new Set([
-    "personalInfo.name",
-    "personalInfo.email",
-    "personalInfo.phone",
-    "personalInfo.title",
-    "summary",
-    "experience",
-    "education",
-    "skills",
-    "certifications",
-  ] as ResumeDataPath[]);
+
+  const initialLoadingFields = new Set<ResumeDataPath>(RESUME_PATHS);
   const [loadingFields, setLoadingFields] =
     useState<Set<ResumeDataPath>>(initialLoadingFields);
 
@@ -136,72 +181,64 @@ export function ResumeBuilder() {
     socket.onopen = () => {
       console.log("Connected to WebSocket server");
       setWs(socket);
-      // Simulate initial loading
       setIsInitialLoading(false);
     };
 
     socket.onmessage = (event) => {
-      const data = JSON.parse(event.data);
+      const data = JSON.parse(event.data) as WebSocketMessage;
       console.log("Received message:", data);
 
       switch (data.type) {
-        case "question":
+        case "question": {
+          const questionData = data.data as QuestionMessage;
           setMessages((prev) => [
             ...prev,
-            {
-              sender: "bot",
-              content: data.data.question,
-            },
+            { sender: "bot", content: questionData.question },
           ]);
-          if (data.data.field) {
+          if (questionData.field && isValidPath(questionData.field)) {
             setLoadingFields((prev) => {
               const newSet = new Set(prev);
-              if (isValidPath(data.data.field)) {
-                newSet.add(data.data.field as ResumeDataPath);
-              }
+              newSet.add(questionData.field as ResumeDataPath);
               return newSet;
             });
           }
           break;
+        }
 
-        case "update":
-          if (isValidPath(data.data.field)) {
+        case "update": {
+          const updateData = data.data as UpdateMessage;
+          if (isValidPath(updateData.field)) {
             setResumeData((prev) =>
-              setNestedValue(
-                prev,
-                data.data.field as ResumeDataPath,
-                data.data.value
-              )
+              setNestedValue(prev, updateData.field, updateData.value)
             );
             setLoadingFields((prev) => {
               const newSet = new Set(prev);
-              newSet.delete(data.data.field as ResumeDataPath);
+              newSet.delete(updateData.field);
               return newSet;
             });
           }
           break;
+        }
 
-        case "complete":
+        case "complete": {
+          const completeData = data.data as CompleteMessage;
           setMessages((prev) => [
             ...prev,
-            {
-              sender: "bot",
-              content: data.data.message,
-            },
+            { sender: "bot", content: completeData.message },
           ]);
-          setResumeData(data.data.finalResume);
+          setResumeData(completeData.finalResume);
           setLoadingFields(new Set());
           break;
+        }
 
-        case "error":
+        case "error": {
+          const errorData = data.data as ErrorMessage;
           setMessages((prev) => [
             ...prev,
-            {
-              sender: "bot",
-              content: `Error: ${data.data.message}`,
-            },
+            { sender: "bot", content: `Error: ${errorData.message}` },
           ]);
           break;
+        }
       }
     };
 
@@ -220,18 +257,7 @@ export function ResumeBuilder() {
   }, []);
 
   function isValidPath(path: string): path is ResumeDataPath {
-    const validPaths: ResumeDataPath[] = [
-      "personalInfo.name",
-      "personalInfo.email",
-      "personalInfo.phone",
-      "personalInfo.title",
-      "summary",
-      "experience",
-      "education",
-      "skills",
-      "certifications",
-    ];
-    return validPaths.includes(path as ResumeDataPath);
+    return RESUME_PATHS.includes(path as ResumeDataPath);
   }
 
   useEffect(() => {
@@ -244,10 +270,7 @@ export function ResumeBuilder() {
     if (inputMessage.trim() !== "" && ws && ws.readyState === WebSocket.OPEN) {
       setMessages((prev) => [
         ...prev,
-        {
-          sender: "user",
-          content: inputMessage,
-        },
+        { sender: "user", content: inputMessage },
       ]);
 
       ws.send(
@@ -261,39 +284,13 @@ export function ResumeBuilder() {
     }
   };
 
-  const isFieldLoading = (field: ResumeDataPath) =>
+  const isFieldLoading = (field: ResumeDataPath): boolean =>
     isInitialLoading || loadingFields.has(field);
 
-  const renderSkeletonField = (field: ResumeDataPath) => {
-    return isFieldLoading(field) || !getNestedValue(resumeData, field);
-  };
+  const renderSkeletonField = (field: ResumeDataPath): boolean =>
+    isFieldLoading(field) || !getNestedValue(resumeData, field);
 
-  // Skeleton components for different sections
-  const SkeletonExperience = () => (
-    <div className="mb-6">
-      <div className="flex items-center mb-2">
-        <Briefcase className="w-5 h-5 mr-2 text-gray-400" />
-        <div className="skeleton w-48 h-6"></div>
-      </div>
-      <div className="skeleton w-32 h-4 mb-2"></div>
-      <div className="space-y-2">
-        <div className="skeleton w-full h-4"></div>
-        <div className="skeleton w-full h-4"></div>
-        <div className="skeleton w-3/4 h-4"></div>
-      </div>
-    </div>
-  );
-
-  const SkeletonEducation = () => (
-    <div className="mb-6">
-      <div className="flex items-center mb-2">
-        <GraduationCap className="w-5 h-5 mr-2 text-gray-400" />
-        <div className="skeleton w-40 h-6"></div>
-      </div>
-      <div className="skeleton w-32 h-4"></div>
-    </div>
-  );
-
+  // UI Component render (same as before)
   return (
     <div className="h-screen bg-gray-100 flex flex-col md:flex-row">
       {/* Chat Interface */}
@@ -361,6 +358,7 @@ export function ResumeBuilder() {
       {/* Resume Template */}
       <div className="w-full md:w-2/3 p-4 overflow-hidden">
         <div className="bg-white shadow-lg p-8 h-screen overflow-y-auto">
+          {/* Header Section */}
           <header className="mb-8 text-center">
             <h1 className="text-4xl font-bold text-gray-800">
               {renderSkeletonField("personalInfo.name") ? (
@@ -378,6 +376,7 @@ export function ResumeBuilder() {
             </div>
           </header>
 
+          {/* Summary Section */}
           <section className="mb-8">
             <h2 className="text-2xl font-semibold text-gray-800 mb-2">
               Summary
@@ -393,14 +392,13 @@ export function ResumeBuilder() {
             )}
           </section>
 
+          {/* Experience Section */}
           <section className="mb-8">
             <h2 className="text-2xl font-semibold text-gray-800 mb-4">
               Experience
             </h2>
             {renderSkeletonField("experience") ? (
-              <>
-                <SkeletonExperience />
-              </>
+              <SkeletonExperience />
             ) : (
               resumeData.experience.map((job, index) => (
                 <div key={index} className="mb-4">
@@ -423,14 +421,13 @@ export function ResumeBuilder() {
             )}
           </section>
 
+          {/* Education Section */}
           <section className="mb-8">
             <h2 className="text-2xl font-semibold text-gray-800 mb-4">
               Education
             </h2>
             {renderSkeletonField("education") ? (
-              <>
-                <SkeletonEducation />
-              </>
+              <SkeletonEducation />
             ) : (
               resumeData.education.map((edu, index) => (
                 <div key={index} className="mb-4">
@@ -448,13 +445,14 @@ export function ResumeBuilder() {
             )}
           </section>
 
+          {/* Skills Section */}
           <section className="mb-8">
             <h2 className="text-2xl font-semibold text-gray-800 mb-4">
               Skills
             </h2>
             {renderSkeletonField("skills") ? (
               <div className="flex flex-wrap gap-2">
-                {[1, 2, 3, 4, 5].map((i) => (
+                {Array.from({ length: 5 }).map((_, i) => (
                   <div key={i} className="skeleton w-24 h-8 rounded-full"></div>
                 ))}
               </div>
@@ -472,13 +470,14 @@ export function ResumeBuilder() {
             )}
           </section>
 
+          {/* Certifications Section */}
           <section className="mb-8">
             <h2 className="text-2xl font-semibold text-gray-800 mb-4">
               Certifications
             </h2>
             {renderSkeletonField("certifications") ? (
               <ul className="space-y-4">
-                {[1, 2, 3].map((i) => (
+                {Array.from({ length: 3 }).map((_, i) => (
                   <li key={i} className="flex items-center">
                     <Award className="w-5 h-5 mr-2 text-gray-400" />
                     <div className="skeleton w-64 h-4"></div>
@@ -501,4 +500,5 @@ export function ResumeBuilder() {
     </div>
   );
 }
+
 export default ResumeBuilder;
