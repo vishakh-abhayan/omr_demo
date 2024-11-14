@@ -131,7 +131,7 @@ export function ResumeBuilder() {
   });
 
   useEffect(() => {
-    const socket = new WebSocket("ws://localhost:8000");
+    const socket = new WebSocket("wss://api.ohmyresume.com");
 
     socket.onopen = () => {
       console.log("Connected to WebSocket server");
