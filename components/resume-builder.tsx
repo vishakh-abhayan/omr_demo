@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Textarea } from "./ui/textarea";
 
 // Types and Interfaces
 interface Message {
@@ -69,6 +70,7 @@ type WebSocketMessageData =
   | ErrorMessage;
 
 interface QuestionMessage {
+  sessionId: string;
   question: string;
   field?: ResumeDataPath;
 }
@@ -154,8 +156,12 @@ export function ResumeBuilder() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [inputMessage, setInputMessage] = useState("");
   const [ws, setWs] = useState<WebSocket | null>(null);
+  const wsRef = useRef<WebSocket | null>(null); // Add this ref to track WS instance
+  const [isConnecting, setIsConnecting] = useState(false); // Add connection state
   const scrollAreaRef = useRef<HTMLDivElement>(null);
   const [isInitialLoading, setIsInitialLoading] = useState(true);
+  const [sessionId, setSessionId] = useState<string | null>(null);
+  const processedMessages = useRef(new Set<string>());
 
   const initialLoadingFields = new Set<ResumeDataPath>(RESUME_PATHS);
   const [loadingFields, setLoadingFields] =
@@ -175,26 +181,54 @@ export function ResumeBuilder() {
     certifications: [],
   });
 
-  useEffect(() => {
-    const socket = new WebSocket("wss://api.ohmyresume.com");
+  const setupWebSocket = () => {
+    if (isConnecting || wsRef.current) return; // Prevent multiple connections
+
+    setIsConnecting(true);
+    const savedSessionId = localStorage.getItem("resume_session_id");
+    const wsUrl = savedSessionId
+      ? `ws://localhost:8000?sessionId=${savedSessionId}`
+      : "ws://localhost:8000";
+
+    const socket = new WebSocket(wsUrl);
+    wsRef.current = socket;
 
     socket.onopen = () => {
       console.log("Connected to WebSocket server");
       setWs(socket);
       setIsInitialLoading(false);
+      setIsConnecting(false);
     };
 
     socket.onmessage = (event) => {
       const data = JSON.parse(event.data) as WebSocketMessage;
       console.log("Received message:", data);
 
+      // Deduplicate messages using a unique identifier
+      const messageId =
+        data.type === "question"
+          ? `${data.type}-${(data.data as QuestionMessage).question}`
+          : `${data.type}-${Date.now()}`;
+
+      if (processedMessages.current.has(messageId)) {
+        console.log("Duplicate message detected, skipping:", messageId);
+        return;
+      }
+      processedMessages.current.add(messageId);
+
       switch (data.type) {
         case "question": {
           const questionData = data.data as QuestionMessage;
+          if (!sessionId && questionData.sessionId) {
+            setSessionId(questionData.sessionId);
+            localStorage.setItem("resume_session_id", questionData.sessionId);
+          }
+
           setMessages((prev) => [
             ...prev,
             { sender: "bot", content: questionData.question },
           ]);
+
           if (questionData.field && isValidPath(questionData.field)) {
             setLoadingFields((prev) => {
               const newSet = new Set(prev);
@@ -216,6 +250,11 @@ export function ResumeBuilder() {
               newSet.delete(updateData.field);
               return newSet;
             });
+            // Save current state to localStorage
+            localStorage.setItem(
+              "resume_data",
+              JSON.stringify(updateData.value)
+            );
           }
           break;
         }
@@ -228,6 +267,11 @@ export function ResumeBuilder() {
           ]);
           setResumeData(completeData.finalResume);
           setLoadingFields(new Set());
+          // Save complete resume to localStorage
+          localStorage.setItem(
+            "resume_data",
+            JSON.stringify(completeData.finalResume)
+          );
           break;
         }
 
@@ -245,14 +289,31 @@ export function ResumeBuilder() {
     socket.onclose = () => {
       console.log("Disconnected from WebSocket server");
       setWs(null);
+      wsRef.current = null;
+      setIsConnecting(false);
+
+      // Attempt to reconnect after delay
+      setTimeout(() => {
+        if (!wsRef.current) {
+          setupWebSocket();
+        }
+      }, 3000);
     };
 
     socket.onerror = (error) => {
       console.error("WebSocket error:", error);
+      setIsConnecting(false);
     };
+  };
+
+  useEffect(() => {
+    setupWebSocket();
 
     return () => {
-      socket.close();
+      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+        wsRef.current.close();
+        wsRef.current = null;
+      }
     };
   }, []);
 
@@ -286,6 +347,8 @@ export function ResumeBuilder() {
 
   const isFieldLoading = (field: ResumeDataPath): boolean =>
     isInitialLoading || loadingFields.has(field);
+
+  console.log("Loading fields:", loadingFields);
 
   const renderSkeletonField = (field: ResumeDataPath): boolean =>
     isFieldLoading(field) || !getNestedValue(resumeData, field);
@@ -336,12 +399,12 @@ export function ResumeBuilder() {
               </div>
             </ScrollArea>
             <div className="flex items-center mt-4">
-              <Input
+              <Textarea
                 placeholder="Type your message..."
                 value={inputMessage}
                 onChange={(e) => setInputMessage(e.target.value)}
                 onKeyPress={(e) => e.key === "Enter" && handleSendMessage()}
-                className="flex-grow mr-2"
+                className="flex-grow "
               />
               <Button
                 onClick={handleSendMessage}
@@ -371,7 +434,7 @@ export function ResumeBuilder() {
               {renderSkeletonField("personalInfo.title") ? (
                 <div className="skeleton w-48 h-6 mx-auto"></div>
               ) : (
-                resumeData.personalInfo.title
+                <p>{resumeData.personalInfo.title}</p>
               )}
             </div>
           </header>

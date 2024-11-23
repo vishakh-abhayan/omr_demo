@@ -1,5 +1,7 @@
-import { ResumeBuilder } from "@/components/resume-builder"
+"use client";
+
+import ResumeBuilder from "@/components/resume-builder";
 
 export default function Page() {
-  return <ResumeBuilder />
+  return <ResumeBuilder />;
 }
