@@ -1,10 +1,9 @@
 "use client";
-import React, { useState, useRef, useEffect } from "react";
+import React, { useState, useRef, useEffect, useCallback } from "react";
 import { Briefcase, GraduationCap, Award, Send } from "lucide-react";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Textarea } from "./ui/textarea";
 
@@ -181,30 +180,11 @@ export function ResumeBuilder() {
     certifications: [],
   });
 
-  const setupWebSocket = () => {
-    if (isConnecting || wsRef.current) return; // Prevent multiple connections
-
-    setIsConnecting(true);
-    const savedSessionId = localStorage.getItem("resume_session_id");
-    const wsUrl = savedSessionId
-      ? `ws://localhost:8000?sessionId=${savedSessionId}`
-      : "ws://localhost:8000";
-
-    const socket = new WebSocket(wsUrl);
-    wsRef.current = socket;
-
-    socket.onopen = () => {
-      console.log("Connected to WebSocket server");
-      setWs(socket);
-      setIsInitialLoading(false);
-      setIsConnecting(false);
-    };
-
-    socket.onmessage = (event) => {
+  const handleWebSocketMessage = useCallback(
+    (event: MessageEvent) => {
       const data = JSON.parse(event.data) as WebSocketMessage;
       console.log("Received message:", data);
 
-      // Deduplicate messages using a unique identifier
       const messageId =
         data.type === "question"
           ? `${data.type}-${(data.data as QuestionMessage).question}`
@@ -284,7 +264,31 @@ export function ResumeBuilder() {
           break;
         }
       }
+    },
+    [sessionId]
+  );
+
+  // Move setupWebSocket to a memoized callback
+  const setupWebSocket = useCallback(() => {
+    if (isConnecting || wsRef.current) return;
+
+    setIsConnecting(true);
+    const savedSessionId = localStorage.getItem("resume_session_id");
+    const wsUrl = savedSessionId
+      ? `wss://api.ohmyresume.com?sessionId=${savedSessionId}`
+      : "wss://api.ohmyresume.com";
+
+    const socket = new WebSocket(wsUrl);
+    wsRef.current = socket;
+
+    socket.onopen = () => {
+      console.log("Connected to WebSocket server");
+      setWs(socket);
+      setIsInitialLoading(false);
+      setIsConnecting(false);
     };
+
+    socket.onmessage = handleWebSocketMessage;
 
     socket.onclose = () => {
       console.log("Disconnected from WebSocket server");
@@ -304,8 +308,9 @@ export function ResumeBuilder() {
       console.error("WebSocket error:", error);
       setIsConnecting(false);
     };
-  };
+  }, [handleWebSocketMessage, isConnecting]);
 
+  // Update useEffect to use the memoized setupWebSocket
   useEffect(() => {
     setupWebSocket();
 
@@ -315,7 +320,7 @@ export function ResumeBuilder() {
         wsRef.current = null;
       }
     };
-  }, []);
+  }, [setupWebSocket]);
 
   function isValidPath(path: string): path is ResumeDataPath {
     return RESUME_PATHS.includes(path as ResumeDataPath);
